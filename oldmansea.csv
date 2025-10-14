@@ -1,0 +1,4 @@
+dataset_type,cross_entropy_loss,self_BLEU
+original,4.3779,0.6562312818629876
+medium,3.8281,0.7211777829789073
+small,5.4067,0.7396047224995066
