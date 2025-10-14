@@ -178,6 +178,56 @@ elif init_from == 'resume':
     model.load_state_dict(state_dict)
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
+elif init_from == 'resume_and_resize':
+    print(f"Resuming training from {out_dir} with vocab size resizing")
+    # resume training from a checkpoint and resize embeddings if vocab_size differs
+    ckpt_path = os.path.join(out_dir, 'ckpt.pt')
+    checkpoint = torch.load(ckpt_path, map_location=device)
+    checkpoint_model_args = checkpoint['model_args']
+    # Keep most config from checkpoint, but allow vocab_size to change
+    old_vocab_size = checkpoint_model_args['vocab_size']
+    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias']:
+        model_args[k] = checkpoint_model_args[k]
+    # Use new vocab_size from dataset
+    model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else old_vocab_size
+    new_vocab_size = model_args['vocab_size']
+    
+    # create the model with new vocab size
+    gptconf = GPTConfig(**model_args)
+    model = GPT(gptconf)
+    state_dict = checkpoint['model']
+    
+    # fix the keys of the state dictionary
+    unwanted_prefix = '_orig_mod.'
+    for k,v in list(state_dict.items()):
+        if k.startswith(unwanted_prefix):
+            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+    
+    # Handle vocab size mismatch by resizing embeddings
+    if new_vocab_size != old_vocab_size:
+        print(f"Resizing embeddings from {old_vocab_size} to {new_vocab_size}")
+        # Resize token embeddings (wte) and language model head (lm_head)
+        old_wte = state_dict['transformer.wte.weight']
+        old_lm_head = state_dict['lm_head.weight']
+        
+        # Create new embeddings, initialize with small random values
+        new_wte = torch.randn(new_vocab_size, old_wte.size(1)) * 0.02
+        new_lm_head = torch.randn(new_vocab_size, old_lm_head.size(1)) * 0.02
+        
+        # Copy over the old embeddings
+        min_vocab = min(old_vocab_size, new_vocab_size)
+        new_wte[:min_vocab] = old_wte[:min_vocab]
+        new_lm_head[:min_vocab] = old_lm_head[:min_vocab]
+        
+        # Update state dict
+        state_dict['transformer.wte.weight'] = new_wte
+        state_dict['lm_head.weight'] = new_lm_head
+    
+    model.load_state_dict(state_dict)
+    # Don't resume iter_num and best_val_loss since we're effectively finetuning
+    iter_num = 0
+    best_val_loss = 1e9
+    print(f"Finetuning from checkpoint (reset iter_num and best_val_loss)")
 elif init_from.startswith('gpt2'):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
     # initialize from OpenAI GPT-2 weights
